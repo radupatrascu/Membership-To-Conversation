@@ -1,0 +1,81 @@
+
+
+
+exports = function(changeEvent) {
+  const db = context.services.get("mongodb-atlas").db("ptx_db");
+  const chatsters = db.collection("Chatster");
+  const userCollection = db.collection("User");
+  const docId = changeEvent.documentKey._id;
+  const user = changeEvent.fullDocument;
+  let projectChanged = false;
+  
+  // TODO: If it's an update, then check what's changed and only take the actions needed
+  
+  console.log(`Mirroring user for docId=${docId}. operationType = ${changeEvent.operationType}`);
+  switch (changeEvent.operationType) {
+    case "insert":
+    case "replace":
+    case "update":
+      console.log(`Writing data for ${user.email}`);
+      let chatsterDoc = {
+        _id: user._id,
+        _partition: "all-users=all-the-users",
+        email: user.email,
+        lastSeenAt: user.lastSeenAt,
+        presence: user.presence
+      };
+      if (user.userSettings) {
+        const prefs = user.userSettings;
+        enginnerDoc.displayName = prefs.displayName;
+        if (prefs.avatarImage && prefs.avatarImage._id) {
+          console.log(`Copying avatarImage`);
+          enginnerDoc.avatarImage = prefs.avatarImage;
+          console.log(`id of avatarImage = ${prefs.avatarImage._id}`);
+        }
+      }
+      chatsters.replaceOne({ _id: user._id }, chatsterDoc, { upsert: true })
+      .then (() => {
+        console.log(`Wrote Enginner document for _id: ${docId}`);
+      }, error => {
+        console.log(`Failed to write Chatster document for _id=${docId}: ${error}`);
+      });
+          
+      if (user.memberOf && user.memberOf.length > 0) {
+        for (i = 0; i < user.memberOf.length; i++) {
+          let membersToAdd = [];
+          if (user.memberOf[i].members.length > 0) {
+            for (j = 0; j < user.memberOf[i].members.length; j++) {
+              if (user.memberOf[i].members[j].membershipStatus == "User added, but invite pending") {
+                membersToAdd.push(user.memberOf[i].members[j].email);
+                user.memberOf[i].members[j].membershipStatus = "Membership active";
+                projectChanged = true;
+              }
+            }
+          }
+          
+          if (membersToAdd.length > 0) {
+            userCollection.updateMany({email: {$in: membersToAdd}}, {$push: {memberOf: user.memberOf[i]}})
+            .then (result => {
+              console.log(`Updated ${result.modifiedCount} other User documents`);
+            }, error => {
+              console.log(`Failed to copy new conversation to other users: ${error}`);
+            });
+          }
+        }
+      }
+      if (projectChanged) {
+        userCollection.updateOne({_id: user._id}, {$set: {memberOf: user.memberOf}});
+      }
+      break;
+    case "delete":
+      engineer.deleteOne({_id: docId})
+      .then (() => {
+        console.log(`Deleted Chatster document for _id: ${docId}`);
+      }, error => {
+        console.log(`Failed to delete Chatster document for _id=${docId}: ${error}`);
+      });
+      break;
+  }
+};
+
+
